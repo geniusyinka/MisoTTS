@@ -11,6 +11,7 @@ ONCE, so you can generate clip after clip in one session (~7s each) without relo
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -34,6 +35,16 @@ MODES = {
     "fp32": ("fp32 — cleanest, slowest (the fidelity baseline)", None, None),
     "mixed": ("mixed-Q4 — fastest, slight quality tradeoff", None, "mixed"),
 }
+
+
+def _clean_path(p: str) -> str:
+    """Forgiving path input: strip whitespace/surrounding quotes, unescape shell-style
+    '\\ ' spaces (from pasted/dragged paths), and expand ~."""
+    if not p:
+        return ""
+    p = p.strip().strip('"').strip("'").strip()
+    p = p.replace("\\ ", " ")
+    return os.path.expanduser(p)
 
 
 def load(mode: str):
@@ -155,8 +166,15 @@ def main():
 
         ref_audio = ref_text = None
         if questionary.confirm("Clone a reference voice?", default=False, style=style).ask():
-            ref_audio = questionary.path("Reference .wav", style=style).ask()
-            ref_text = questionary.text("Reference transcript (recommended for best cloning)", style=style).ask()
+            rp = _clean_path(questionary.path("Reference .wav (Tab to autocomplete)", style=style).ask() or "")
+            if rp and os.path.isfile(rp):
+                ref_audio = rp
+                ref_text = questionary.text(
+                    "What is said in that clip? (the transcript text — optional, improves cloning)",
+                    style=style,
+                ).ask()
+            elif rp:
+                print(f"  \033[31m! file not found: {rp}\n    → skipping clone, using a default voice.\033[0m")
 
         out = questionary.text("Save to", default="miso_out.wav", style=style).ask()
 
