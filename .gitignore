@@ -44,3 +44,13 @@ context_audio.wav
 *.pt
 *.ckpt
 *.safetensors
+
+# MLX port: frame-0 capture / validation outputs
+candidate*/
+reference/
+ref_trace*/
+
+# voice-identity test outputs (audio)
+refs/
+cuda/
+mlx/

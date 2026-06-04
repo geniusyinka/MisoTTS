@@ -18,6 +18,7 @@
   <a href="#model-introduction">Model Introduction</a> |
   <a href="#model-summary">Model Summary</a> |
   <a href="#usage">Usage</a> |
+  <a href="#apple-silicon-mps--mlx">Apple Silicon</a> |
   <a href="#safety">Safety</a>
 </p>
 
@@ -193,11 +194,57 @@ Hugging Face cache resumes from files that already completed.
 
 ---
 
+## Apple Silicon (MPS & MLX)
+
+The upstream inference path is CUDA-only and explicitly skips Metal. This fork adds
+**Apple Silicon support**, validated against the CUDA reference at the logit level
+(not just "it makes sound") — teacher-forced frame-by-frame across **5 prompt styles and
+1,117 frames** (incl. two 30s+ clips). Two paths are included:
+
+- **PyTorch / MPS** (`run_misotts_mac.py`) — a correctness-first quick-win using
+  `PYTORCH_ENABLE_MPS_FALLBACK=1`. Runs, but slow (~21× slower than real-time).
+- **MLX** (`run_misotts_mlx.py`) — a native [MLX](https://github.com/ml-explore/mlx)
+  port (model in `misotts_mlx.py`), ~**12.8× faster** than the MPS path:
+
+  | Mode | Flag | RTF | Quality |
+  |---|---|---|---|
+  | fp32 | *(default)* | 4.71× | clean |
+  | **Q8** | `--bits 8` | **2.01×** | **lossless** |
+  | mixed-Q4 | `--quant mixed` | 1.65× | slight tradeoff |
+
+  *(RTF = compute-seconds / audio-seconds; measured on an M4 Pro 64 GB. RTF > 1 means
+  slower than real-time. fp32 & Q8 reproduce the CUDA logits to mean cosine 0.9999 / ~99%
+  top-1 over 1,117 frames; Q8 is lossless even on 30s clips. mixed-Q4 trades fidelity
+  (cos ~0.997, ~93% top-1) for speed.)*
+
+```bash
+uv pip install -r requirements-mlx.txt
+python run_misotts_mlx.py --text "Hey! This is running on my Mac." --bits 8
+```
+
+A separate **voice-identity test** (5 voice-cloned characters, scored with a speaker-
+verification embedding) found cross-backend speaker similarity (0.882) equal to a
+backend's own take-to-take variation (0.886) and well above the different-speaker floor
+(0.776) — i.e. a cloned character is the **same person** on MLX as on CUDA. (Voice cloning
+works on the MLX path too.)
+
+The MLX path needs **no Hugging Face token** (it uses an ungated Llama-3.2 tokenizer
+mirror and the public Mimi codec). See
+[`docs/running-misotts-on-apple-silicon.md`](docs/running-misotts-on-apple-silicon.md)
+for the full guide and gotchas, and
+[`docs/porting-misotts-to-apple-silicon-technical.md`](docs/porting-misotts-to-apple-silicon-technical.md)
+for the technical account (validation methodology, the port, and the real-time wall).
+
+> **Note:** the MLX runner applies the SilentCipher watermark by default (CPU/torch, ~0.7s,
+> imperceptible — verifiable with `python watermarking.py --audio_path <file>`); pass
+> `--no-watermark` only for local debugging (see [Safety](#safety)). Generation is not
+> real-time; see the table.
+
 ## Deployment Notes
 
 Miso TTS 8B is a large model. For best results, use a CUDA GPU with sufficient
 VRAM for the checkpoint precision you are loading. The default inference path
-uses `torch.bfloat16`.
+uses `torch.bfloat16`. On Apple Silicon, see [Apple Silicon](#apple-silicon-mps--mlx).
 
 ---
 
