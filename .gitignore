@@ -49,3 +49,8 @@ context_audio.wav
 candidate*/
 reference/
 ref_trace*/
+
+# voice-identity test outputs (audio)
+refs/
+cuda/
+mlx/
