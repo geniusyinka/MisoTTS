@@ -1,0 +1,5 @@
+#!/bin/bash
+# Interactive MisoTTS synthesis wizard (Apple Silicon / MLX).
+# Runs under the model's mlx venv so all deps are present.
+exec "/Users/yinka/Documents/work/pithoslabs/misoTTS:MLX/MisoTTS/.venv/bin/python" \
+     "/Users/yinka/Documents/work/pithoslabs/misoTTS:MLX/MisoTTS/miso_cli.py" "$@"
