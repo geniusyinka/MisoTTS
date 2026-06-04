@@ -11,8 +11,8 @@ Reports the real-time factor (RTF) = compute-seconds / audio-seconds. The fp32/M
 torch baseline was ~21x; this is the number the MLX port aims to beat (and that
 Phase-3 quantization should push below 1.0).
 
-NOTE: watermarking is NOT applied here yet (the torch SilentCipher step is separable
-and CPU-bound). Re-attach it before any real/published use -- see MisoTTS terms.
+The SilentCipher watermark is applied by default (CPU/torch, ~0.7s, imperceptible);
+pass --no-watermark to disable it for local debugging only. See MisoTTS terms.
 
 Usage:
   python run_misotts_mlx.py --text "Hey! This is running on MLX." --ms 6000
@@ -98,6 +98,9 @@ def main() -> None:
     ap.add_argument("--group-size", type=int, default=64)
     ap.add_argument("--compiled-decoder", action="store_true",
                     help="use the mx.compile fixed-cache depth decoder")
+    ap.add_argument("--no-watermark", dest="watermark", action="store_false",
+                    help="DISABLE the SilentCipher watermark (default: on, per MisoTTS terms)")
+    ap.set_defaults(watermark=True)
     ap.add_argument("--out", default="mlx_out.wav")
     ap.add_argument("--model", default=None)
     args = ap.parse_args()
@@ -195,10 +198,23 @@ def main() -> None:
 
     audio_np = np.array(audio).squeeze().astype(np.float32)
     n_frames = len(samples)
-    audio_secs = audio_np.shape[-1] / int(mimi.sample_rate)
+    sr = int(mimi.sample_rate)
+    audio_secs = audio_np.shape[-1] / sr   # measured on the model output (pre-watermark)
+
+    # Re-attach the SilentCipher watermark (CPU/torch, separable from the MLX model).
+    # On by default per MisoTTS terms; identifies the audio as AI-generated.
+    wm_status = "DISABLED (--no-watermark)"
+    if args.watermark:
+        import torch
+        from watermarking import MISO_TTS_WATERMARK, load_watermarker, watermark as apply_watermark
+        tw = time.time()
+        watermarker = load_watermarker(device="cpu")
+        wm_audio, sr = apply_watermark(watermarker, torch.from_numpy(audio_np), sr, MISO_TTS_WATERMARK)
+        audio_np = wm_audio.detach().cpu().numpy().astype(np.float32)
+        wm_status = f"SilentCipher applied in {time.time() - tw:.1f}s (sr={sr})"
 
     import soundfile as sf
-    sf.write(args.out, audio_np, int(mimi.sample_rate))
+    sf.write(args.out, audio_np, sr)
 
     total = gen_secs + dec_secs
     rtf = total / audio_secs if audio_secs > 0 else float("nan")
@@ -206,7 +222,8 @@ def main() -> None:
     print(f"[mlx] generated {audio_secs:.2f}s of audio in {total:.1f}s  ->  RTF={rtf:.2f}x "
           f"({'faster than real-time' if rtf < 1 else 'slower than real-time'})")
     print(f"[mlx] per-frame: {gen_secs / n_frames * 1000:.0f} ms  (target frame period = 80 ms)")
-    print(f"[mlx] saved {args.out}  (NOTE: not watermarked -- re-attach SilentCipher before real use)")
+    print(f"[mlx] watermark: {wm_status}")
+    print(f"[mlx] saved {args.out}")
 
 
 if __name__ == "__main__":
