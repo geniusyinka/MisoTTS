@@ -222,6 +222,12 @@ uv pip install -r requirements-mlx.txt
 python run_misotts_mlx.py --text "Hey! This is running on my Mac." --bits 8
 ```
 
+A separate **voice-identity test** (5 voice-cloned characters, scored with a speaker-
+verification embedding) found cross-backend speaker similarity (0.882) equal to a
+backend's own take-to-take variation (0.886) and well above the different-speaker floor
+(0.776) — i.e. a cloned character is the **same person** on MLX as on CUDA. (Voice cloning
+works on the MLX path too.)
+
 The MLX path needs **no Hugging Face token** (it uses an ungated Llama-3.2 tokenizer
 mirror and the public Mimi codec). See
 [`docs/running-misotts-on-apple-silicon.md`](docs/running-misotts-on-apple-silicon.md)

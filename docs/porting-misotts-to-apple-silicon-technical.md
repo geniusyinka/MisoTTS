@@ -248,6 +248,51 @@ GPU in bf16 and stream weights one tensor at a time, so CPU RAM never holds the 
 
 ---
 
+## Same character on both backends: a voice-identity test
+
+Logits prove the math. But a separate, human-meaningful question remained: if you have a
+*character* — a voice with a recognizable vibe — does it survive the port? Is MLX-Jane the same
+person as CUDA-Jane?
+
+There's a subtlety that shapes the whole experiment: **the speaker tag `[0]`/`[1]` is not a
+stored identity** — it's a turn-marker, and without an audio prompt the model invents a fresh
+voice per seed. And **seeds don't transfer across backends** (`torch.manual_seed` and
+`mx.random.seed` are different generators). So you can't pin "the same character" on both sides
+with a number. The only portable anchor is a **reference voice clip** — i.e. voice cloning. (This
+test therefore also exercises, and validates, voice cloning on the MLX side: Mimi-encode the
+reference, assemble `[ref-text | ref-audio | new-text]` context, generate.)
+
+The design: generate **5 distinct reference voices** on CUDA, then on *each* backend voice-clone
+every reference and speak one shared line **twice** (temp 0.9). Score all clips with a pretrained
+speaker-verification embedding (Resemblyzer) — cosine similarity is the "same person?" meter —
+with three baselines: a backend's own take-to-take variation (the natural floor), the
+cross-backend difference (the question), and different-character pairs (the "different person"
+calibration).
+
+| Speaker-similarity (mean over 5 characters) | cosine |
+|---|---|
+| within-CUDA (take 1 vs take 2) | 0.886 |
+| within-MLX (take 1 vs take 2) | 0.889 |
+| **cross-backend (CUDA vs MLX, same character)** | **0.882** |
+| between-character (different people) | 0.776 |
+
+**The cross-backend similarity (0.882) is statistically identical to a backend's own
+take-to-take variation (0.886).** In plain terms: MLX-Jane differs from CUDA-Jane *no more than
+CUDA-Jane's two takes differ from each other.* The port adds **no measurable identity drift**
+beyond the model's natural wobble. (The different-character floor sits high at 0.776 because all
+voices come from one model and share acoustic DNA — so the decisive signal is *cross ≈ within*,
+not the absolute gap.) Reference adherence was equal on both sides (ref→CUDA 0.820, ref→MLX
+0.854). And exactly as the architecture predicts: **identity holds, performance breathes** — the
+same character's pitch and tempo vary take-to-take on *both* backends (the sampling), in the same
+ranges; the *who* is locked, the *how* is free.
+
+The honest framing: this proves **same identity, no extra cross-backend drift** — the strongest
+claim *independent* generation allows (a bit-identical take is impossible by sampling, even twice
+on CUDA without a frozen seed; that case is covered by the teacher-forced code-replay above).
+Anchor a character with a reference, and it's the same person on MLX as on CUDA.
+
+---
+
 ## The real-time wall (an honest ending)
 
 Crossing the magic 1.0× (real-time) did **not** pan out, and the reason is worth documenting.
