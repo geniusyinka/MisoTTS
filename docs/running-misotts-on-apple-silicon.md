@@ -72,6 +72,24 @@ It prints timing and the real-time factor:
 > The MLX path uses the **ungated** `unsloth/Llama-3.2-1B` tokenizer and the public Kyutai Mimi
 > codec, so it needs **no Hugging Face token**.
 
+### Voice cloning
+
+Pass a reference clip with `--ref-audio` to speak in that voice (give its transcript via
+`--ref-text` for best results — without an audio prompt the model picks a fresh random voice
+each run):
+
+```bash
+python run_misotts_mlx.py --bits 8 \
+  --ref-audio jane.wav --ref-text "what jane says in jane.wav" \
+  --text "This line is spoken in Jane's voice." --out jane_says.wav
+```
+
+The reference is resampled to 24 kHz and Mimi-encoded into the context. A cross-backend test
+(speaker-verification embeddings over 5 cloned characters) found a cloned voice is the **same
+person** on MLX as on CUDA — cross-backend similarity equals a backend's own take-to-take
+variation. Identity is anchored by the reference, so it's stable run to run (pitch/energy still
+vary take to take); a bare `--speaker` id is only a turn marker, not a fixed identity.
+
 ---
 
 ## What to expect (be realistic)
