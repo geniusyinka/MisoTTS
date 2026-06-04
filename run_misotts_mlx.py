@@ -16,7 +16,10 @@ pass --no-watermark to disable it for local debugging only. See MisoTTS terms.
 
 Usage:
   python run_misotts_mlx.py --text "Hey! This is running on MLX." --ms 6000
-  python run_misotts_mlx.py --dtype float16        # speed test once fp32 is confirmed
+  python run_misotts_mlx.py --bits 8               # lossless, ~2x slower than real-time
+  # voice cloning: speak in a reference voice (pass its transcript for best results)
+  python run_misotts_mlx.py --ref-audio jane.wav --ref-text "what jane says in jane.wav" \
+      --text "This line is spoken in Jane's voice."
 """
 import argparse
 import glob
@@ -70,6 +73,32 @@ def tokenize_text(tok, text: str, speaker: int):
     return mx.array(frame), mx.array(mask)
 
 
+def load_ref_audio(path: str) -> mx.array:
+    """Load a reference clip as mono 24 kHz (the rate Mimi expects)."""
+    import soundfile as sf
+    a, sr0 = sf.read(path)
+    if a.ndim > 1:
+        a = a.mean(axis=1)
+    a = a.astype(np.float32)
+    if sr0 != 24000:
+        import torch, torchaudio
+        a = torchaudio.functional.resample(torch.from_numpy(a), sr0, 24000).numpy()
+    return mx.array(a)
+
+
+def audio_context_frames(mimi, audio_24k: mx.array):
+    """Mimi-encode a reference clip into context frames (audio cols set, + EOS frame).
+    Mirrors the torch tokenize_audio so the cloned voice conditions exactly as on CUDA."""
+    codes = np.array(mimi.encode(audio_24k[None, None])[0])        # (32, T)
+    codes = np.concatenate([codes, np.zeros((32, 1))], axis=1)     # + EOS column
+    T1 = codes.shape[1]
+    frame = np.zeros((T1, 33), dtype=np.int32)
+    mask = np.zeros((T1, 33), dtype=np.float32)
+    frame[:, :32] = codes.T
+    mask[:, :32] = 1.0
+    return mx.array(frame), mx.array(mask)
+
+
 def sample_topk(logits: mx.array, topk: int, temp: float) -> mx.array:
     """Mirror MisoTTS sample_topk: temperature, top-k mask, multinomial."""
     if temp <= 0:
@@ -86,6 +115,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--text", default="Hey! I can't believe this is running locally on my Mac.")
     ap.add_argument("--speaker", type=int, default=0)
+    ap.add_argument("--ref-audio", default=None,
+                    help="reference voice clip to clone (any wav; resampled to 24kHz)")
+    ap.add_argument("--ref-text", default="",
+                    help="transcript of --ref-audio (recommended for best cloning)")
+    ap.add_argument("--ref-speaker", type=int, default=None,
+                    help="speaker id for the reference segment (default: --speaker)")
     ap.add_argument("--ms", type=int, default=6000, help="max audio length in ms")
     ap.add_argument("--temp", type=float, default=0.9)
     ap.add_argument("--topk", type=int, default=50)
@@ -122,7 +157,18 @@ def main() -> None:
     tok = load_text_tokenizer()
     print(f"[mlx] mimi + tokenizer loaded in {time.time() - t:.1f}s")
 
+    # Build the prompt. With --ref-audio, prepend a voice-clone context:
+    #   [ref-text | ref-audio (Mimi codes) | new-text]  -> the model speaks `text` in the
+    # reference voice. Without it, just the text (a fresh, random voice).
     text_frame, text_mask = tokenize_text(tok, args.text, args.speaker)
+    if args.ref_audio:
+        ref_spk = args.ref_speaker if args.ref_speaker is not None else args.speaker
+        rtf, rtm = tokenize_text(tok, args.ref_text, ref_spk)
+        raf, ram = audio_context_frames(mimi, load_ref_audio(args.ref_audio))
+        text_frame = mx.concat([rtf, raf, text_frame], axis=0)
+        text_mask = mx.concat([rtm, ram, text_mask], axis=0)
+        print(f"[mlx] voice-cloning from {args.ref_audio} "
+              f"(ref {raf.shape[0]} frames, speaker {ref_spk})")
     curr_tokens = mx.expand_dims(text_frame, 0).astype(mx.int32)   # (1, S, 33)
     curr_mask = mx.expand_dims(text_mask, 0)                       # (1, S, 33)
 
