@@ -284,11 +284,39 @@ def remap_key(k: str) -> str:
     return k
 
 
-def load_misotts_mlx(safetensors_path: str, dtype=mx.float32) -> MisoTTSMLX:
-    """Load the torch checkpoint into the MLX model (full precision `dtype`).
+def _mixed_predicate(group_size: int):
+    """backbone Linears -> 4-bit (the bandwidth hog); decoder + heads -> 8-bit;
+    embeddings left full precision (quantizing the lookup tables injects per-token
+    noise that flips argmax and wrecks the c1/decoder path)."""
 
-    Remaps the torchtune key names to mlx_lm's and loads strict -- audio_head (a raw
-    array) and the embeddings/heads all map 1:1. No transposes, no q/k permutation."""
+    def pred(path: str, module):
+        if not isinstance(module, (nn.Linear, nn.Embedding)):
+            return False
+        if "embeddings" in path:
+            return False
+        if path.startswith("backbone"):
+            return {"group_size": group_size, "bits": 4}
+        return {"group_size": group_size, "bits": 8}
+
+    return pred
+
+
+def load_misotts_mlx(
+    safetensors_path: str,
+    dtype=mx.float32,
+    bits: Optional[int] = None,
+    group_size: int = 64,
+    quant: Optional[str] = None,
+) -> MisoTTSMLX:
+    """Load the torch checkpoint into the MLX model.
+
+    quant=None & bits=None -> full precision (`dtype`).
+    bits in {8, 4}         -> uniform quantization of all Linear/Embedding layers.
+    quant="mixed"          -> backbone 4-bit, decoder/heads 8-bit, embeddings fp
+                              (best quality/speed trade-off for this RVQ model).
+    audio_head (a raw array) is never quantized. Quantization slashes the per-token
+    weight-memory traffic that dominates this bandwidth-bound autoregressive loop.
+    """
     from safetensors import safe_open
 
     model = MisoTTSMLX()
@@ -298,6 +326,12 @@ def load_misotts_mlx(safetensors_path: str, dtype=mx.float32) -> MisoTTSMLX:
             mapped[remap_key(k)] = mx.array(f.get_tensor(k)).astype(dtype)
 
     model.load_weights(list(mapped.items()), strict=True)
+
+    if quant == "mixed":
+        nn.quantize(model, group_size=group_size, bits=4, class_predicate=_mixed_predicate(group_size))
+    elif bits is not None:
+        nn.quantize(model, group_size=group_size, bits=bits)
+
     model.eval()
     mx.eval(model.parameters())
     return model
